@@ -1,0 +1,17 @@
+cd '/Users/malachyfernandez/Documents/1-programing/ReactMaker/react-tree/React Tree'
+
+
+npm install
+npm run build
+
+
+node dist/cli.js "/Users/malachyfernandez/Documents/1-programing/apps-and-sites/wolfspoint/wolfspoint/app/index.tsx" \
+  --interactive --watch --ignore components/ui,components/layout
+
+  
+node dist/cli.js /Users/malachyfernandez/Documents/1-programing/apps-and-sites/wolfspoint/wolfspoint/app/index.tsx --watch --ignore components/ui,components/layout
+
+node dist/cli.js /Users/malachyfernandez/Documents/1-programing/apps-and-sites/wolfspoint/wolfspoint/app/index.tsx --ignore components/ui,components/layout
+
+
+node dist/cli.js /Users/malachyfernandez/Documents/1-programing/apps-and-sites/wolfspoint/wolfspoint/app/components/game/JoinedGames.tsx --watch --ignore components/ui,components/layout

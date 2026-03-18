@@ -1,0 +1,25 @@
+{
+  "name": "react-preview-switcher",
+  "version": "1.0.0",
+  "private": true,
+  "bin": {
+    "react-preview-switcher": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "chokidar": "^4.0.3",
+    "commander": "^13.1.0",
+    "detect-port": "^2.1.0",
+    "fast-glob": "^3.3.3"
+  },
+  "devDependencies": {
+    "@types/blessed": "^0.1.25",
+    "@types/node": "^22.13.14",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

@@ -1,0 +1,49 @@
+cd /Users/malachyfernandez/Documents/1-programing/ReactMaker/React-compont-visualizer/react-cloner
+npm run build
+
+rm -rf /Users/malachyfernandez/Desktop/wolfspoint-joinedgames-preview
+
+node dist/cli-final.js generate \
+  --project-root /Users/malachyfernandez/Documents/1-programing/apps-and-sites/wolfspoint/wolfspoint \
+  --base-file app/index.tsx \
+  --target-component app/components/game/GameList.tsx \
+  --out /Users/malachyfernandez/Desktop/wolfspoint-joinedgames-preview \
+  --framework expo-router \
+  --ignore app/components/ui,app/components/layout \
+  --base-mode overwrite-shell
+
+
+node dist/cli-final.js generate \
+  --project-root /Users/malachyfernandez/Documents/1-programing/apps-and-sites/wolfspoint/wolfspoint \
+  --base-file app/index.tsx \
+  --target-component app/components/game/AllGamesPage.tsx \
+  --out /Users/malachyfernandez/Desktop/wolfspoint-joinedgames-preview \
+  --framework expo-router \
+  --ignore app/components/ui,app/components/layout \
+  --base-mode overwrite-shell
+
+node dist/cli-final.js generate \
+  --project-root /Users/malachyfernandez/Documents/1-programing/apps-and-sites/wolfspoint/wolfspoint \
+  --base-file app/index.tsx \
+  --target-component app/components/MainPage.tsx \
+  --out /Users/malachyfernandez/Desktop/wolfspoint-joinedgames-preview \
+  --framework expo-router \
+  --ignore app/components/ui,app/components/layout \
+  --base-mode overwrite-shell
+
+
+node dist/cli-final.js generate \
+  --project-root /Users/malachyfernandez/Documents/1-programing/apps-and-sites/wolfspoint/wolfspoint \
+  --base-file app/index.tsx \
+  --target-component app/components/MainPage.tsx \
+  --out /Users/malachyfernandez/Desktop/wolfspoint-joinedgames-preview \
+  --framework expo-router \
+  --ignore app/components/ui,app/components/layout \
+  --base-mode overwrite-shell \
+  --mirror-all
+  
+  
+
+cd /Users/malachyfernandez/Desktop/wolfspoint-joinedgames-preview
+npm install
+npx expo start --web --port 8083
