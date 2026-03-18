@@ -23,6 +23,7 @@ interface RawCliOptions {
   treeCli?: string;
   clonerCli?: string;
   diagnosticSeconds?: string;
+  autoOpen?: string;
 }
 
 interface ResolvedOptions {
@@ -44,6 +45,7 @@ interface ResolvedOptions {
   clonedBaseFileAbs: string;
   watchDirAbs: string;
   diagnosticSeconds: number | null;
+  autoOpenList: string[];
 }
 
 interface TreeLine {
@@ -82,6 +84,17 @@ function basenameWithoutExtension(filePath: string): string {
 
 function splitIgnoreList(ignore: string): string[] {
   return ignore
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function splitAutoOpenList(autoOpen?: string): string[] {
+  if (!autoOpen) {
+    return [];
+  }
+
+  return autoOpen
     .split(",")
     .map((part) => part.trim())
     .filter(Boolean);
@@ -543,12 +556,14 @@ class PreviewSwitcherApp {
   private diagnosticTimer: NodeJS.Timeout | null = null;
   private shutdownPromise: Promise<void>;
   private shutdownResolver: (() => void) | null = null;
+  private pendingAutoOpenQueue: string[] = [];
 
   constructor(opts: ResolvedOptions) {
     this.opts = opts;
 
     this.selectedMirroredRelative = normalizeSlashes(opts.targetComponent);
     this.selectedComponentName = basenameWithoutExtension(opts.targetComponent);
+    this.pendingAutoOpenQueue = [...opts.autoOpenList];
 
     this.screen = blessed.screen({
       smartCSR: true,
@@ -949,16 +964,20 @@ class PreviewSwitcherApp {
       return;
     }
 
-    this.log(`Selected component from tree: ${line.componentName}`);
+    await this.openComponentByName(line.componentName);
+  }
+
+  private async openComponentByName(componentName: string): Promise<void> {
+    this.log(`Attempting to open component: ${componentName}`);
 
     const matches = await findMirroredMatchesByComponentName(
       this.opts.out,
-      line.componentName,
+      componentName,
     );
 
     if (matches.length === 0) {
       this.log(
-        `No mirrored file found for component "${line.componentName}". ` +
+        `No mirrored file found for component "${componentName}". ` +
           `Expected it under .visual-clone/mirrored.`,
       );
       this.refreshStatus("no mirrored match found");
@@ -971,9 +990,14 @@ class PreviewSwitcherApp {
       chosen = matches[0] ?? null;
     } else {
       this.log(
-        `Found ${matches.length} mirrored matches for "${line.componentName}".`,
+        `Found ${matches.length} mirrored matches for "${componentName}".`,
       );
-      chosen = await this.showMatchChooser(line.componentName, matches);
+      if (this.opts.autoOpenList.length > 0 && this.pendingAutoOpenQueue.length > 0) {
+        // In auto-open mode default to first match to avoid modal
+        chosen = matches[0] ?? null;
+      } else {
+        chosen = await this.showMatchChooser(componentName, matches);
+      }
     }
 
     if (!chosen) {
@@ -1155,7 +1179,28 @@ class PreviewSwitcherApp {
     await this.regenerate("initial startup");
     this.startDiagnosticTimer();
 
+    if (this.pendingAutoOpenQueue.length > 0) {
+      await this.runAutoOpenQueue();
+    }
+
     await this.shutdownPromise;
+  }
+
+  private async runAutoOpenQueue(): Promise<void> {
+    for (const componentName of this.pendingAutoOpenQueue) {
+      try {
+        await this.openComponentByName(componentName);
+        this.selectTreeLineByComponentName(componentName);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error ?? "Unknown error");
+        this.log(
+          `Auto-open failed for ${componentName}: ${message}`,
+        );
+      }
+    }
+
+    this.pendingAutoOpenQueue = [];
   }
 
   private startDiagnosticTimer(): void {
@@ -1275,6 +1320,7 @@ function resolveOptions(raw: RawCliOptions): ResolvedOptions {
     diagnosticSeconds: raw.diagnosticSeconds
       ? Number(raw.diagnosticSeconds)
       : null,
+    autoOpenList: splitAutoOpenList(raw.autoOpen),
   };
 }
 
@@ -1315,6 +1361,10 @@ async function validateOptions(opts: ResolvedOptions): Promise<void> {
     throw new Error(
       `Invalid diagnostic seconds: ${opts.diagnosticSeconds}`,
     );
+  }
+
+  if (opts.autoOpenList.some((item) => item.length === 0)) {
+    throw new Error("Invalid --auto-open list provided.");
   }
 }
 
@@ -1554,6 +1604,10 @@ async function main(): Promise<void> {
     .option(
       "--diagnostic-seconds <number>",
       "Automatically exit after N seconds and dump logs",
+    )
+    .option(
+      "--auto-open <csv>",
+      "Comma-separated component names to auto-open sequentially for diagnostics",
     )
     .option("--no-ui", "Run in console mode without interactive TUI", false);
 

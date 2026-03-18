@@ -35,6 +35,15 @@ function splitIgnoreList(ignore) {
         .map((part) => part.trim())
         .filter(Boolean);
 }
+function splitAutoOpenList(autoOpen) {
+    if (!autoOpen) {
+        return [];
+    }
+    return autoOpen
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean);
+}
 function ensureDotRelative(importPath) {
     if (importPath.startsWith(".")) {
         return importPath;
@@ -346,10 +355,13 @@ class PreviewSwitcherApp {
         this.selectedIndex = 0;
         this.logHistory = [];
         this.diagnosticTimer = null;
+        this.shutdownResolver = null;
+        this.pendingAutoOpenQueue = [];
         this.watchTimer = null;
         this.opts = opts;
         this.selectedMirroredRelative = normalizeSlashes(opts.targetComponent);
         this.selectedComponentName = basenameWithoutExtension(opts.targetComponent);
+        this.pendingAutoOpenQueue = [...opts.autoOpenList];
         this.screen = blessed_1.default.screen({
             smartCSR: true,
             fullUnicode: true,
@@ -461,6 +473,9 @@ class PreviewSwitcherApp {
         this.registerUiEvents();
         this.refreshStatus();
         this.screen.render();
+        this.shutdownPromise = new Promise((resolve) => {
+            this.shutdownResolver = resolve;
+        });
     }
     registerUiEvents() {
         this.screen.key(["q", "C-c"], async () => {
@@ -667,10 +682,13 @@ class PreviewSwitcherApp {
             this.refreshStatus("line is not selectable");
             return;
         }
-        this.log(`Selected component from tree: ${line.componentName}`);
-        const matches = await findMirroredMatchesByComponentName(this.opts.out, line.componentName);
+        await this.openComponentByName(line.componentName);
+    }
+    async openComponentByName(componentName) {
+        this.log(`Attempting to open component: ${componentName}`);
+        const matches = await findMirroredMatchesByComponentName(this.opts.out, componentName);
         if (matches.length === 0) {
-            this.log(`No mirrored file found for component "${line.componentName}". ` +
+            this.log(`No mirrored file found for component "${componentName}". ` +
                 `Expected it under .visual-clone/mirrored.`);
             this.refreshStatus("no mirrored match found");
             return;
@@ -680,8 +698,14 @@ class PreviewSwitcherApp {
             chosen = matches[0] ?? null;
         }
         else {
-            this.log(`Found ${matches.length} mirrored matches for "${line.componentName}".`);
-            chosen = await this.showMatchChooser(line.componentName, matches);
+            this.log(`Found ${matches.length} mirrored matches for "${componentName}".`);
+            if (this.opts.autoOpenList.length > 0 && this.pendingAutoOpenQueue.length > 0) {
+                // In auto-open mode default to first match to avoid modal
+                chosen = matches[0] ?? null;
+            }
+            else {
+                chosen = await this.showMatchChooser(componentName, matches);
+            }
         }
         if (!chosen) {
             this.log("Selection cancelled.");
@@ -803,6 +827,23 @@ class PreviewSwitcherApp {
         }
         await this.regenerate("initial startup");
         this.startDiagnosticTimer();
+        if (this.pendingAutoOpenQueue.length > 0) {
+            await this.runAutoOpenQueue();
+        }
+        await this.shutdownPromise;
+    }
+    async runAutoOpenQueue() {
+        for (const componentName of this.pendingAutoOpenQueue) {
+            try {
+                await this.openComponentByName(componentName);
+                this.selectTreeLineByComponentName(componentName);
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+                this.log(`Auto-open failed for ${componentName}: ${message}`);
+            }
+        }
+        this.pendingAutoOpenQueue = [];
     }
     startDiagnosticTimer() {
         if (!this.opts.diagnosticSeconds || this.opts.diagnosticSeconds <= 0) {
@@ -842,6 +883,10 @@ class PreviewSwitcherApp {
         await stopChildProcess(this.expoChild);
         this.expoChild = null;
         this.screen.destroy();
+        if (this.shutdownResolver) {
+            this.shutdownResolver();
+            this.shutdownResolver = null;
+        }
         process.exit(0);
     }
 }
@@ -887,6 +932,7 @@ function resolveOptions(raw) {
         diagnosticSeconds: raw.diagnosticSeconds
             ? Number(raw.diagnosticSeconds)
             : null,
+        autoOpenList: splitAutoOpenList(raw.autoOpen),
     };
 }
 async function validateOptions(opts) {
@@ -912,6 +958,9 @@ async function validateOptions(opts) {
     if (opts.diagnosticSeconds !== null &&
         (Number.isNaN(opts.diagnosticSeconds) || opts.diagnosticSeconds < 0)) {
         throw new Error(`Invalid diagnostic seconds: ${opts.diagnosticSeconds}`);
+    }
+    if (opts.autoOpenList.some((item) => item.length === 0)) {
+        throw new Error("Invalid --auto-open list provided.");
     }
 }
 async function runConsoleMode(opts) {
@@ -1072,6 +1121,7 @@ async function main() {
         .option("--tree-cli <path>", "Optional override path to react-tree dist/cli.js")
         .option("--cloner-cli <path>", "Optional override path to react-cloner dist/cli-final.js")
         .option("--diagnostic-seconds <number>", "Automatically exit after N seconds and dump logs")
+        .option("--auto-open <csv>", "Comma-separated component names to auto-open sequentially for diagnostics")
         .option("--no-ui", "Run in console mode without interactive TUI", false);
     program.parse(process.argv);
     const raw = program.opts();
