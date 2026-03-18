@@ -24,6 +24,7 @@ interface RawCliOptions {
   clonerCli?: string;
   diagnosticSeconds?: string;
   autoOpen?: string;
+  noBrowser?: boolean;
 }
 
 interface ResolvedOptions {
@@ -46,6 +47,7 @@ interface ResolvedOptions {
   watchDirAbs: string;
   diagnosticSeconds: number | null;
   autoOpenList: string[];
+  openBrowser: boolean;
 }
 
 interface TreeLine {
@@ -109,6 +111,37 @@ function ensureDotRelative(importPath: string): string {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function openBrowserToUrl(
+  url: string,
+  log: (line: string) => void,
+): Promise<void> {
+  let command: string;
+  let args: string[];
+
+  if (process.platform === "darwin") {
+    command = "open";
+    args = [url];
+  } else if (process.platform === "win32") {
+    command = "cmd";
+    args = ["/c", "start", "", url];
+  } else {
+    command = "xdg-open";
+    args = [url];
+  }
+
+  try {
+    await runCommandStreaming(command, args, {
+      onStdoutLine: (line) => log(`[browser] ${line}`),
+      onStderrLine: (line) => log(`[browser] ${line}`),
+    });
+    log(`Opened browser to ${url}`);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error ?? "Unknown error");
+    log(`Failed to open browser (${command}): ${message}`);
+  }
 }
 
 async function exists(targetPath: string): Promise<boolean> {
@@ -509,7 +542,6 @@ async function startExpoWeb(
     "--web",
     "--port",
     String(availablePort),
-    "--non-interactive",
   ];
 
   log(`Starting Expo web on port ${availablePort}...`);
@@ -518,12 +550,18 @@ async function startExpoWeb(
     cwd: opts.out,
     env: {
       CI: "1",
-      BROWSER: "none",
+      BROWSER: opts.openBrowser ? undefined : "none",
       EXPO_NO_TELEMETRY: "1",
     },
     onStdoutLine: (line) => log(`[expo] ${line}`),
     onStderrLine: (line) => log(`[expo] ${line}`),
   });
+
+  if (opts.openBrowser) {
+    setTimeout(() => {
+      void openBrowserToUrl(`http://localhost:${availablePort}`, log);
+    }, 2000);
+  }
 
   return {
     child,
@@ -1321,6 +1359,7 @@ function resolveOptions(raw: RawCliOptions): ResolvedOptions {
       ? Number(raw.diagnosticSeconds)
       : null,
     autoOpenList: splitAutoOpenList(raw.autoOpen),
+    openBrowser: raw.noBrowser ? false : true,
   };
 }
 

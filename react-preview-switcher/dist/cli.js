@@ -53,6 +53,33 @@ function ensureDotRelative(importPath) {
 function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
+async function openBrowserToUrl(url, log) {
+    let command;
+    let args;
+    if (process.platform === "darwin") {
+        command = "open";
+        args = [url];
+    }
+    else if (process.platform === "win32") {
+        command = "cmd";
+        args = ["/c", "start", "", url];
+    }
+    else {
+        command = "xdg-open";
+        args = [url];
+    }
+    try {
+        await runCommandStreaming(command, args, {
+            onStdoutLine: (line) => log(`[browser] ${line}`),
+            onStderrLine: (line) => log(`[browser] ${line}`),
+        });
+        log(`Opened browser to ${url}`);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+        log(`Failed to open browser (${command}): ${message}`);
+    }
+}
 async function exists(targetPath) {
     try {
         await promises_1.default.access(targetPath);
@@ -323,19 +350,23 @@ async function startExpoWeb(opts, log) {
         "--web",
         "--port",
         String(availablePort),
-        "--non-interactive",
     ];
     log(`Starting Expo web on port ${availablePort}...`);
     const child = startLongRunningCommand(getBin("npx"), args, {
         cwd: opts.out,
         env: {
             CI: "1",
-            BROWSER: "none",
+            BROWSER: opts.openBrowser ? undefined : "none",
             EXPO_NO_TELEMETRY: "1",
         },
         onStdoutLine: (line) => log(`[expo] ${line}`),
         onStderrLine: (line) => log(`[expo] ${line}`),
     });
+    if (opts.openBrowser) {
+        setTimeout(() => {
+            void openBrowserToUrl(`http://localhost:${availablePort}`, log);
+        }, 2000);
+    }
     return {
         child,
         port: availablePort,
@@ -933,6 +964,7 @@ function resolveOptions(raw) {
             ? Number(raw.diagnosticSeconds)
             : null,
         autoOpenList: splitAutoOpenList(raw.autoOpen),
+        openBrowser: raw.noBrowser ? false : true,
     };
 }
 async function validateOptions(opts) {

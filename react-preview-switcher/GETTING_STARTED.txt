@@ -1,0 +1,28 @@
+# Getting Started (Example Flow)
+
+The sample paths in the README refer to the wolfspoint Expo project we've been testing with.
+Here are the exact commands I run on this machine:
+
+1. Open a terminal and go to the tool directory:
+   cd /Users/malachyfernandez/Documents/1-programing/ReactMaker/react-preview-switcher
+
+2. Install/build the orchestrator:
+   npm install
+   npm run build
+
+3. Kick off the full preview workflow (clone + install + Expo + tree UI):
+   node dist/cli.js \
+     --project-root /Users/malachyfernandez/Documents/1-programing/apps-and-sites/wolfspoint/wolfspoint \
+     --base-file app/index.tsx \
+     --target-component app/components/MainPage.tsx \
+     --out /Users/malachyfernandez/Desktop/wolfspoint-joinedgames-preview \
+     --framework expo-router \
+     --ignore app/components/ui,app/components/layout \
+     --watch
+
+- `app/index.tsx` is the base file we clone/patch inside the preview app.
+- `app/components/MainPage.tsx` is the initial component mirrored into `.visual-clone/mirrored/...`.
+- `--out` points to the desktop preview folder; it will be deleted/rebuilt on each run.
+- Expo Web auto-launches at http://localhost:19006 once the command finishes the first build.
+
+Use these exact paths if you want to reproduce the behavior I've been demonstrating. Adjust them if you're targeting a different project.
