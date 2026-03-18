@@ -68,6 +68,7 @@ function getBin(bin: "node" | "npm" | "npx" | "pnpm" | "yarn"): string {
     if (bin === "node") {
       return "node.exe";
     }
+
     return `${bin}.cmd`;
   }
 
@@ -554,7 +555,7 @@ async function startExpoWeb(
   const child = startLongRunningCommand(getBin("npx"), args, {
     cwd: opts.out,
     env: {
-      ...(shouldOpenBrowser ? {} : { BROWSER: "none" }),
+      BROWSER: "none",
       EXPO_NO_TELEMETRY: "1",
     },
     onStdoutLine: (line) => log(`[expo] ${line}`),
@@ -596,6 +597,8 @@ class PreviewSwitcherApp {
   private currentPort: number | null = null;
   private selectedIndex: number = 0;
   private expoReady = false;
+  private previewRootResyncPending = false;
+  private hasOpenedBrowser = false;
   private logHistory: string[] = [];
   private diagnosticTimer: NodeJS.Timeout | null = null;
   private shutdownPromise: Promise<void>;
@@ -724,6 +727,7 @@ class PreviewSwitcherApp {
     });
 
     this.registerUiEvents();
+    this.setTreeUiState("building");
     this.refreshStatus();
     this.screen.render();
 
@@ -745,6 +749,23 @@ class PreviewSwitcherApp {
       "r: rebuild",
       "q: quit",
     ].join(" | ");
+  }
+
+  private setTreeUiState(state: "building" | "ready" | "error"): void {
+    const borderColor =
+      state === "building" ? "red" : state === "ready" ? "green" : "yellow";
+    const labelSuffix =
+      state === "building"
+        ? " (building...)"
+        : state === "error"
+          ? " (error)"
+          : "";
+
+    const style = (this.treeList.style ??= {});
+    const border = (style.border ??= {});
+    border.fg = borderColor;
+
+    this.treeList.setLabel(` JSX Tree Files${labelSuffix} `);
   }
 
   private registerUiEvents(): void {
@@ -984,6 +1005,10 @@ class PreviewSwitcherApp {
       `Updated PreviewRoot import in ${this.opts.baseFile} -> ${importPath}`,
     );
     this.refreshStatus("PreviewRoot updated");
+
+    if (!this.expoReady) {
+      this.previewRootResyncPending = true;
+    }
   }
 
   private async showMatchChooser(
@@ -1192,6 +1217,7 @@ class PreviewSwitcherApp {
 
     this.regenerating = true;
     this.expoReady = false;
+    this.setTreeUiState("building");
     this.refreshStatus(`starting rebuild: ${reason}`);
     this.log(`=== Rebuild started: ${reason} ===`);
 
@@ -1211,15 +1237,12 @@ class PreviewSwitcherApp {
 
       await this.restorePreviousSelectionIfPossible();
 
-      if (this.selectedComponentName) {
-        this.selectTreeLineByComponentName(this.selectedComponentName);
-      }
-
       this.refreshStatus("tree ready, starting Expo...");
       this.log("Tree ready. Launching Expo web server...");
 
+      const shouldOpenBrowser = options.openBrowser ?? (!this.hasOpenedBrowser && this.opts.openBrowser);
       const expo = await startExpoWeb(this.opts, (line) => this.log(line), {
-        openBrowser: options.openBrowser ?? false,
+        openBrowser: shouldOpenBrowser,
       });
       this.expoChild = expo.child;
       this.currentPort = expo.port;
@@ -1227,16 +1250,23 @@ class PreviewSwitcherApp {
       await delay(1500);
 
       this.expoReady = true;
+      this.setTreeUiState("ready");
       this.log(
         `Preview available at http://localhost:${this.currentPort ?? this.opts.port}`,
       );
       this.refreshStatus("ready");
+      await this.resyncPreviewRootAfterExpo();
       this.log(`=== Rebuild finished: ${reason} ===`);
+
+      if (shouldOpenBrowser) {
+        this.hasOpenedBrowser = true;
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : String(error ?? "Unknown error");
       this.log(`Rebuild failed: ${message}`);
       this.refreshStatus("rebuild failed");
+      this.setTreeUiState("error");
     } finally {
       this.regenerating = false;
 
@@ -1244,6 +1274,25 @@ class PreviewSwitcherApp {
         this.pendingRegenerate = false;
         await this.regenerate("queued rebuild", { openBrowser: false });
       }
+    }
+  }
+
+  private async resyncPreviewRootAfterExpo(): Promise<void> {
+    if (!this.previewRootResyncPending) {
+      return;
+    }
+
+    this.previewRootResyncPending = false;
+
+    try {
+      await delay(500);
+      const contents = await fs.readFile(this.opts.clonedBaseFileAbs, "utf8");
+      await fs.writeFile(this.opts.clonedBaseFileAbs, contents, "utf8");
+      this.log("PreviewRoot file touched to ensure Expo reloads latest selection.");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error ?? "Unknown error");
+      this.log(`Failed to resync PreviewRoot: ${message}`);
     }
   }
 

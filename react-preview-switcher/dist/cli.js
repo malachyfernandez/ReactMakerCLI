@@ -505,6 +505,7 @@ class PreviewSwitcherApp {
             },
         });
         this.registerUiEvents();
+        this.setTreeUiState("building");
         this.refreshStatus();
         this.screen.render();
         this.shutdownPromise = new Promise((resolve) => {
@@ -523,6 +524,19 @@ class PreviewSwitcherApp {
             "r: rebuild",
             "q: quit",
         ].join(" | ");
+    }
+    setTreeUiState(state) {
+        var _a;
+        const borderColor = state === "building" ? "red" : state === "ready" ? "green" : "yellow";
+        const labelSuffix = state === "building"
+            ? " (building...)"
+            : state === "error"
+                ? " (error)"
+                : "";
+        const style = ((_a = this.treeList).style ?? (_a.style = {}));
+        const border = (style.border ?? (style.border = {}));
+        border.fg = borderColor;
+        this.treeList.setLabel(` JSX Tree Files${labelSuffix} `);
     }
     registerUiEvents() {
         this.screen.key(["q", "C-c"], async () => {
@@ -845,6 +859,7 @@ class PreviewSwitcherApp {
         }
         this.regenerating = true;
         this.expoReady = false;
+        this.setTreeUiState("building");
         this.refreshStatus(`starting rebuild: ${reason}`);
         this.log(`=== Rebuild started: ${reason} ===`);
         try {
@@ -859,9 +874,6 @@ class PreviewSwitcherApp {
             await runCloner(this.opts, (line) => this.log(line));
             await installDependencies(this.opts, (line) => this.log(line));
             await this.restorePreviousSelectionIfPossible();
-            if (this.selectedComponentName) {
-                this.selectTreeLineByComponentName(this.selectedComponentName);
-            }
             this.refreshStatus("tree ready, starting Expo...");
             this.log("Tree ready. Launching Expo web server...");
             const expo = await startExpoWeb(this.opts, (line) => this.log(line), {
@@ -871,6 +883,7 @@ class PreviewSwitcherApp {
             this.currentPort = expo.port;
             await delay(1500);
             this.expoReady = true;
+            this.setTreeUiState("ready");
             this.log(`Preview available at http://localhost:${this.currentPort ?? this.opts.port}`);
             this.refreshStatus("ready");
             this.log(`=== Rebuild finished: ${reason} ===`);
@@ -879,6 +892,7 @@ class PreviewSwitcherApp {
             const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
             this.log(`Rebuild failed: ${message}`);
             this.refreshStatus("rebuild failed");
+            this.setTreeUiState("error");
         }
         finally {
             this.regenerating = false;

@@ -19,6 +19,7 @@ Here are the exact commands I run on this machine:
      --framework expo-router \
      --ignore app/components/ui,app/components/layout \
      --watch
+     --skip-components ConvexDialog.Portal
 
 - `app/index.tsx` is the base file we clone/patch inside the preview app.
 - `app/components/MainPage.tsx` is the initial component mirrored into `.visual-clone/mirrored/...`.
