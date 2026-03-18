@@ -335,7 +335,7 @@ async function runTreeTool(opts, log) {
         `${parsed.selectableCount} selectable file nodes.`);
     return parsed;
 }
-async function startExpoWeb(opts, log) {
+async function startExpoWeb(opts, log, options = {}) {
     if (opts.framework !== "expo-router") {
         throw new Error(`Unsupported framework "${opts.framework}". ` +
             `This implementation currently supports only expo-router.`);
@@ -352,17 +352,17 @@ async function startExpoWeb(opts, log) {
         String(availablePort),
     ];
     log(`Starting Expo web on port ${availablePort}...`);
+    const shouldOpenBrowser = options.openBrowser ?? opts.openBrowser;
     const child = startLongRunningCommand(getBin("npx"), args, {
         cwd: opts.out,
         env: {
-            CI: "1",
-            BROWSER: opts.openBrowser ? undefined : "none",
+            ...(shouldOpenBrowser ? {} : { BROWSER: "none" }),
             EXPO_NO_TELEMETRY: "1",
         },
         onStdoutLine: (line) => log(`[expo] ${line}`),
         onStderrLine: (line) => log(`[expo] ${line}`),
     });
-    if (opts.openBrowser) {
+    if (shouldOpenBrowser) {
         setTimeout(() => {
             void openBrowserToUrl(`http://localhost:${availablePort}`, log);
         }, 2000);
@@ -382,8 +382,10 @@ class PreviewSwitcherApp {
         this.shuttingDown = false;
         this.selectedMirroredRelative = null;
         this.selectedComponentName = null;
+        this.highlightedComponentName = null;
         this.currentPort = null;
         this.selectedIndex = 0;
+        this.expoReady = false;
         this.logHistory = [];
         this.diagnosticTimer = null;
         this.shutdownResolver = null;
@@ -392,6 +394,7 @@ class PreviewSwitcherApp {
         this.opts = opts;
         this.selectedMirroredRelative = normalizeSlashes(opts.targetComponent);
         this.selectedComponentName = basenameWithoutExtension(opts.targetComponent);
+        this.highlightedComponentName = this.selectedComponentName;
         this.pendingAutoOpenQueue = [...opts.autoOpenList];
         this.screen = blessed_1.default.screen({
             smartCSR: true,
@@ -494,7 +497,7 @@ class PreviewSwitcherApp {
                 left: 1,
                 right: 1,
             },
-            content: "↑/↓ or j/k: move between files | Enter/o: open selected file | r: rebuild | q: quit | mouse wheel: scroll | click: select",
+            content: this.buildHelpContent(),
             style: {
                 border: {
                     fg: "magenta",
@@ -507,6 +510,19 @@ class PreviewSwitcherApp {
         this.shutdownPromise = new Promise((resolve) => {
             this.shutdownResolver = resolve;
         });
+    }
+    buildHelpContent() {
+        const openHint = this.opts.autoOpenOnSelect
+            ? "Selection auto-opens"
+            : "Enter/o: open selected file";
+        return [
+            "↑/↓ or j/k: move",
+            "mouse wheel: scroll",
+            "click: select",
+            openHint,
+            "r: rebuild",
+            "q: quit",
+        ].join(" | ");
     }
     registerUiEvents() {
         this.screen.key(["q", "C-c"], async () => {
@@ -522,10 +538,12 @@ class PreviewSwitcherApp {
             await this.openCurrentSelection();
         });
         this.screen.key(["r"], async () => {
-            await this.regenerate("manual rebuild");
+            await this.regenerate("manual rebuild", { openBrowser: true });
         });
-        this.treeList.on("click", async (_data) => {
-            this.selectIndex(this.selectedIndex);
+        this.treeList.on("click", () => {
+            this.selectIndex(this.selectedIndex, {
+                autoOpen: this.opts.autoOpenOnSelect,
+            });
         });
         this.treeList.on("select item", () => {
             this.refreshStatus();
@@ -583,21 +601,47 @@ class PreviewSwitcherApp {
         }
         return output;
     }
-    selectIndex(index) {
+    selectIndex(index, options = {}) {
         if (index < 0 || index >= this.treeLines.length) {
             return;
         }
         this.selectedIndex = index;
         this.treeList.select(index);
-        this.treeList.scrollTo(index);
+        this.scrollTreeToSelection();
+        const currentLine = this.getCurrentTreeLine();
+        this.highlightedComponentName = currentLine?.componentName ?? null;
         this.refreshStatus();
         this.screen.render();
+        if (options.autoOpen && this.opts.autoOpenOnSelect) {
+            const line = this.getCurrentTreeLine();
+            if (line?.selectable && line.componentName) {
+                void this.openComponentByName(line.componentName);
+            }
+        }
     }
     selectFirstSelectable() {
         const indexes = this.getSelectableIndexes();
         if (indexes.length > 0) {
             this.selectIndex(indexes[0]);
         }
+    }
+    restoreSelectionAfterTreeUpdate() {
+        const candidateNames = [
+            this.highlightedComponentName,
+            this.selectedComponentName,
+        ].filter((name) => Boolean(name));
+        for (const name of candidateNames) {
+            const index = this.treeLines.findIndex((line) => line.selectable && line.componentName === name);
+            if (index >= 0) {
+                this.selectIndex(index);
+                return;
+            }
+        }
+        if (this.selectedIndex >= 0 && this.selectedIndex < this.treeLines.length) {
+            this.selectIndex(this.selectedIndex);
+            return;
+        }
+        this.selectFirstSelectable();
     }
     moveSelection(delta) {
         if (this.treeLines.length === 0) {
@@ -621,13 +665,25 @@ class PreviewSwitcherApp {
         }
         const nextIndex = selectableIndexes[nextPosition];
         if (typeof nextIndex === "number") {
-            this.selectIndex(nextIndex);
+            this.selectIndex(nextIndex, {
+                autoOpen: this.opts.autoOpenOnSelect,
+            });
         }
+    }
+    scrollTreeToSelection() {
+        const height = this.treeList.height;
+        if (typeof height !== "number") {
+            this.treeList.scrollTo(this.selectedIndex);
+            return;
+        }
+        const centerOffset = Math.max(Math.floor(height / 2) - 1, 0);
+        const target = this.selectedIndex - centerOffset;
+        this.treeList.scrollTo(Math.max(target, 0));
     }
     renderTree(parsed) {
         this.treeLines = parsed.lines;
         this.treeList.setItems(parsed.lines.map(prefixTreeLine));
-        this.selectFirstSelectable();
+        this.restoreSelectionAfterTreeUpdate();
         this.refreshStatus(`tree loaded (${parsed.selectableCount} selectable file nodes)`);
         this.screen.render();
     }
@@ -641,6 +697,9 @@ class PreviewSwitcherApp {
         this.refreshStatus("PreviewRoot updated");
     }
     async showMatchChooser(componentName, matches) {
+        if (this.opts.autoOpenOnSelect) {
+            return matches[0] ?? null;
+        }
         return new Promise((resolve) => {
             const outer = blessed_1.default.box({
                 parent: this.screen,
@@ -716,6 +775,12 @@ class PreviewSwitcherApp {
         await this.openComponentByName(line.componentName);
     }
     async openComponentByName(componentName) {
+        if (!this.expoReady) {
+            const waitMessage = "Expo is still launching. Please wait a moment before opening components.";
+            this.log(waitMessage);
+            this.refreshStatus("waiting for Expo server");
+            return;
+        }
         this.log(`Attempting to open component: ${componentName}`);
         const matches = await findMirroredMatchesByComponentName(this.opts.out, componentName);
         if (matches.length === 0) {
@@ -772,32 +837,40 @@ class PreviewSwitcherApp {
             this.selectIndex(index);
         }
     }
-    async regenerate(reason) {
+    async regenerate(reason, options = {}) {
         if (this.regenerating) {
             this.pendingRegenerate = true;
             this.log(`Rebuild already running. Queued another rebuild (${reason}).`);
             return;
         }
         this.regenerating = true;
+        this.expoReady = false;
         this.refreshStatus(`starting rebuild: ${reason}`);
         this.log(`=== Rebuild started: ${reason} ===`);
         try {
             await stopChildProcess(this.expoChild);
             this.expoChild = null;
             this.currentPort = null;
+            const parsedTree = await runTreeTool(this.opts, (line) => this.log(line));
+            this.renderTree(parsedTree);
+            this.refreshStatus("tree ready, preparing preview build...");
+            this.log("Tree ready. Preparing preview build...");
             await removeOutDir(this.opts.out, (line) => this.log(line));
             await runCloner(this.opts, (line) => this.log(line));
             await installDependencies(this.opts, (line) => this.log(line));
-            const expo = await startExpoWeb(this.opts, (line) => this.log(line));
-            this.expoChild = expo.child;
-            this.currentPort = expo.port;
-            await delay(1500);
-            const parsedTree = await runTreeTool(this.opts, (line) => this.log(line));
-            this.renderTree(parsedTree);
             await this.restorePreviousSelectionIfPossible();
             if (this.selectedComponentName) {
                 this.selectTreeLineByComponentName(this.selectedComponentName);
             }
+            this.refreshStatus("tree ready, starting Expo...");
+            this.log("Tree ready. Launching Expo web server...");
+            const expo = await startExpoWeb(this.opts, (line) => this.log(line), {
+                openBrowser: options.openBrowser ?? false,
+            });
+            this.expoChild = expo.child;
+            this.currentPort = expo.port;
+            await delay(1500);
+            this.expoReady = true;
             this.log(`Preview available at http://localhost:${this.currentPort ?? this.opts.port}`);
             this.refreshStatus("ready");
             this.log(`=== Rebuild finished: ${reason} ===`);
@@ -811,7 +884,7 @@ class PreviewSwitcherApp {
             this.regenerating = false;
             if (this.pendingRegenerate) {
                 this.pendingRegenerate = false;
-                await this.regenerate("queued rebuild");
+                await this.regenerate("queued rebuild", { openBrowser: false });
             }
         }
     }
@@ -820,7 +893,7 @@ class PreviewSwitcherApp {
             clearTimeout(this.watchTimer);
         }
         this.watchTimer = setTimeout(async () => {
-            await this.regenerate(reason);
+            await this.regenerate(reason, { openBrowser: false });
         }, this.opts.watchDebounceMs);
     }
     startWatcher() {
@@ -856,7 +929,7 @@ class PreviewSwitcherApp {
         if (this.opts.watch) {
             this.startWatcher();
         }
-        await this.regenerate("initial startup");
+        await this.regenerate("initial startup", { openBrowser: true });
         this.startDiagnosticTimer();
         if (this.pendingAutoOpenQueue.length > 0) {
             await this.runAutoOpenQueue();
@@ -965,6 +1038,7 @@ function resolveOptions(raw) {
             : null,
         autoOpenList: splitAutoOpenList(raw.autoOpen),
         openBrowser: raw.noBrowser ? false : true,
+        autoOpenOnSelect: raw.manualOpen ? false : true,
     };
 }
 async function validateOptions(opts) {
@@ -1154,7 +1228,8 @@ async function main() {
         .option("--cloner-cli <path>", "Optional override path to react-cloner dist/cli-final.js")
         .option("--diagnostic-seconds <number>", "Automatically exit after N seconds and dump logs")
         .option("--auto-open <csv>", "Comma-separated component names to auto-open sequentially for diagnostics")
-        .option("--no-ui", "Run in console mode without interactive TUI", false);
+        .option("--no-ui", "Run in console mode without interactive TUI", false)
+        .option("--manual-open", "Require Enter/o to switch components (default auto-opens on selection)", false);
     program.parse(process.argv);
     const raw = program.opts();
     const opts = resolveOptions(raw);
