@@ -302,6 +302,11 @@ async function runCloner(opts, log) {
         "overwrite-shell",
         "--mirror-all",
     ];
+    if (opts.skipComponents.length > 0) {
+        for (const component of opts.skipComponents) {
+            args.push("--skip-components", component);
+        }
+    }
     log("Starting clone generation...");
     await runCommandStreaming(getBin("node"), args, {
         onStdoutLine: (line) => log(`[cloner] ${line}`),
@@ -356,7 +361,7 @@ async function startExpoWeb(opts, log, options = {}) {
     const child = startLongRunningCommand(getBin("npx"), args, {
         cwd: opts.out,
         env: {
-            ...(shouldOpenBrowser ? {} : { BROWSER: "none" }),
+            BROWSER: "none",
             EXPO_NO_TELEMETRY: "1",
         },
         onStdoutLine: (line) => log(`[expo] ${line}`),
@@ -386,6 +391,8 @@ class PreviewSwitcherApp {
         this.currentPort = null;
         this.selectedIndex = 0;
         this.expoReady = false;
+        this.previewRootResyncPending = false;
+        this.hasOpenedBrowser = false;
         this.logHistory = [];
         this.diagnosticTimer = null;
         this.shutdownResolver = null;
@@ -709,6 +716,9 @@ class PreviewSwitcherApp {
         this.selectedComponentName = basenameWithoutExtension(mirroredRelativePath);
         this.log(`Updated PreviewRoot import in ${this.opts.baseFile} -> ${importPath}`);
         this.refreshStatus("PreviewRoot updated");
+        if (!this.expoReady) {
+            this.previewRootResyncPending = true;
+        }
     }
     async showMatchChooser(componentName, matches) {
         if (this.opts.autoOpenOnSelect) {
@@ -876,8 +886,9 @@ class PreviewSwitcherApp {
             await this.restorePreviousSelectionIfPossible();
             this.refreshStatus("tree ready, starting Expo...");
             this.log("Tree ready. Launching Expo web server...");
+            const shouldOpenBrowser = options.openBrowser ?? (!this.hasOpenedBrowser && this.opts.openBrowser);
             const expo = await startExpoWeb(this.opts, (line) => this.log(line), {
-                openBrowser: options.openBrowser ?? false,
+                openBrowser: shouldOpenBrowser,
             });
             this.expoChild = expo.child;
             this.currentPort = expo.port;
@@ -886,7 +897,11 @@ class PreviewSwitcherApp {
             this.setTreeUiState("ready");
             this.log(`Preview available at http://localhost:${this.currentPort ?? this.opts.port}`);
             this.refreshStatus("ready");
+            await this.resyncPreviewRootAfterExpo();
             this.log(`=== Rebuild finished: ${reason} ===`);
+            if (shouldOpenBrowser) {
+                this.hasOpenedBrowser = true;
+            }
         }
         catch (error) {
             const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
@@ -900,6 +915,22 @@ class PreviewSwitcherApp {
                 this.pendingRegenerate = false;
                 await this.regenerate("queued rebuild", { openBrowser: false });
             }
+        }
+    }
+    async resyncPreviewRootAfterExpo() {
+        if (!this.previewRootResyncPending) {
+            return;
+        }
+        this.previewRootResyncPending = false;
+        try {
+            await delay(500);
+            const contents = await promises_1.default.readFile(this.opts.clonedBaseFileAbs, "utf8");
+            await promises_1.default.writeFile(this.opts.clonedBaseFileAbs, contents, "utf8");
+            this.log("PreviewRoot file touched to ensure Expo reloads latest selection.");
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+            this.log(`Failed to resync PreviewRoot: ${message}`);
         }
     }
     scheduleRegenerate(reason) {
@@ -1053,6 +1084,7 @@ function resolveOptions(raw) {
         autoOpenList: splitAutoOpenList(raw.autoOpen),
         openBrowser: raw.noBrowser ? false : true,
         autoOpenOnSelect: raw.manualOpen ? false : true,
+        skipComponents: raw.skipComponents ?? [],
     };
 }
 async function validateOptions(opts) {
@@ -1243,7 +1275,8 @@ async function main() {
         .option("--diagnostic-seconds <number>", "Automatically exit after N seconds and dump logs")
         .option("--auto-open <csv>", "Comma-separated component names to auto-open sequentially for diagnostics")
         .option("--no-ui", "Run in console mode without interactive TUI", false)
-        .option("--manual-open", "Require Enter/o to switch components (default auto-opens on selection)", false);
+        .option("--manual-open", "Require Enter/o to switch components (default auto-opens on selection)", false)
+        .option("--skip-components <component...>", "Component names to exclude from mirroring (repeatable/variadic)");
     program.parse(process.argv);
     const raw = program.opts();
     const opts = resolveOptions(raw);

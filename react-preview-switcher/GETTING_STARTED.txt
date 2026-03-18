@@ -18,7 +18,7 @@ Here are the exact commands I run on this machine:
      --out /Users/malachyfernandez/Desktop/wolfspoint-joinedgames-preview \
      --framework expo-router \
      --ignore app/components/ui,app/components/layout \
-     --watch
+     --watch \
      --skip-components ConvexDialog.Portal
 
 - `app/index.tsx` is the base file we clone/patch inside the preview app.

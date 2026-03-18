@@ -26,6 +26,7 @@ interface RawCliOptions {
   autoOpen?: string;
   noBrowser?: boolean;
   manualOpen?: boolean;
+  skipComponents?: string[];
 }
 
 interface ResolvedOptions {
@@ -50,6 +51,7 @@ interface ResolvedOptions {
   autoOpenList: string[];
   openBrowser: boolean;
   autoOpenOnSelect: boolean;
+  skipComponents: string[];
 }
 
 interface TreeLine {
@@ -463,6 +465,12 @@ async function runCloner(
     "overwrite-shell",
     "--mirror-all",
   ];
+
+  if (opts.skipComponents.length > 0) {
+    for (const component of opts.skipComponents) {
+      args.push("--skip-components", component);
+    }
+  }
 
   log("Starting clone generation...");
 
@@ -1505,6 +1513,7 @@ function resolveOptions(raw: RawCliOptions): ResolvedOptions {
     autoOpenList: splitAutoOpenList(raw.autoOpen),
     openBrowser: raw.noBrowser ? false : true,
     autoOpenOnSelect: raw.manualOpen ? false : true,
+    skipComponents: raw.skipComponents ?? [],
   };
 }
 
@@ -1798,6 +1807,10 @@ async function main(): Promise<void> {
       "--manual-open",
       "Require Enter/o to switch components (default auto-opens on selection)",
       false,
+    )
+    .option(
+      "--skip-components <component...>",
+      "Component names to exclude from mirroring (repeatable/variadic)",
     );
 
   program.parse(process.argv);
